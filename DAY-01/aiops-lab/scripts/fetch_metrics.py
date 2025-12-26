@@ -1,3 +1,8 @@
+print("CONFIG FILE PATH:", CONFIG_PATH)
+
+with open(CONFIG_PATH) as f:
+    print("CONFIG CONTENT:\n", f.read())
+
 import requests
 import pandas as pd
 import time
@@ -51,3 +56,4 @@ def fetch_historical(hours=1):
 
 if __name__ == "__main__":
     fetch_historical(hours=6)
+
