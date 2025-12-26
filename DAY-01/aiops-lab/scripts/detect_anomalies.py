@@ -1,21 +1,24 @@
-# Copyright (c) 2025 Rajinikanth Vadla
-# All rights reserved.
-
-import joblib
-import requests
-import numpy as np
-import time
 import os
+import time
+import requests
 import configparser
+import numpy as np
+from sklearn.ensemble import IsolationForest
 
+# ------------------ Load Config ------------------
 config = configparser.ConfigParser()
-config.read('config.ini')
-MODEL_FILE = "aiops_model.joblib"
-PROM_URL = config['monitoring']['prometheus_url']
-QUERY = config['monitoring']['query']
-SLACK_WEBHOOK = config['monitoring']['slack_webhook']
+config.read("scripts/config.ini")
 
-def get_cpu():
+PROM_URL = config["monitoring"]["prometheus_url"]
+QUERY = config["monitoring"]["query"]
+
+SLACK_WEBHOOK = os.getenv("SLACK_WEBHOOK_URL")
+
+if not SLACK_WEBHOOK:
+    raise RuntimeError("❌ SLACK_WEBHOOK_URL environment variable not set")
+
+# ------------------ Fetch Metric ------------------
+def fetch_cpu_usage():
     try:
         response = requests.get(
             f"{PROM_URL}/api/v1/query",
@@ -26,39 +29,40 @@ def get_cpu():
         data = response.json()
         return float(data["data"]["result"][0]["value"][1])
     except Exception as e:
-        print(f"⚠️ Fetch error: {str(e)}")
+        print(f"⚠️ Fetch error: {e}")
         return None
 
+# ------------------ Slack Alert ------------------
 def alert_slack(message):
     try:
-        requests.post(
+        response = requests.post(
             SLACK_WEBHOOK,
             json={"text": message},
             timeout=5
         )
+        response.raise_for_status()
         print("✅ Slack alert sent")
     except Exception as e:
-        print(f"⚠️ Slack alert failed: {str(e)}")
+        print(f"⚠️ Slack alert failed: {e}")
 
+# ------------------ Main Logic ------------------
 if __name__ == "__main__":
-    if not os.path.exists(MODEL_FILE):
-        exit("❌ Model file not found - run train_model.py first")
-    if not os.path.exists('config.ini'):
-        exit("❌ config.ini not found")
-    if SLACK_WEBHOOK == "YOUR_SLACK_WEBHOOK_URL":
-        print("⚠️ Warning: Please configure Slack webhook in config.ini")
-        
-    model = joblib.load(MODEL_FILE)
-    print("✅ AIOps detector started. Monitoring CPU...")
-    
+    history = []
+
+    print("🚀 AIOps anomaly detection started...")
+
     while True:
-        cpu = get_cpu()
+        cpu = fetch_cpu_usage()
         if cpu is not None:
-            pred = model.predict([[cpu]])
-            if pred[0] == -1:
-                msg = f"🚨 CPU Anomaly Detected: {cpu:.2f}%"
-                print(msg)
-                alert_slack(msg)
-            else:
-                print(f"✅ CPU Normal: {cpu:.2f}%")
-        time.sleep(30)
+            history.append(cpu)
+            print(f"📊 CPU Usage: {cpu:.2f}%")
+
+            if len(history) >= 10:
+                model = IsolationForest(contamination=0.2)
+                model.fit(np.array(history).reshape(-1, 1))
+
+                prediction = model.predict([[cpu]])
+                if prediction[0] == -1:
+                    alert_slack(f"🚨 Anomaly detected! CPU usage = {cpu:.2f}%")
+
+        time.sleep(15)
